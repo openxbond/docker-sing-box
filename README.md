@@ -60,6 +60,7 @@ docker run -d --name xbond-sing-box --restart always \
 
 - 日誌前綴 `[xbond-sing-box]`：`docker logs xbond-sing-box` 查看拉取、校驗與排程記錄。
 - `operation not permitted` 或 `/dev/net/tun: no such file`：網關模式缺少 `--cap-add NET_ADMIN` 或 `--device /dev/net/tun`；此時 sing-box 無法啟動，容器會反覆重啟並在日誌中記錄原因。
+- 啟動初期偶發 `add route: no route to host` 後退出：多半是宿主機網絡尚未就緒（例如開機過程中），或仍有舊的代理容器／殘留路由規則在搶占時的競態，`restart: always` 會自動重試並自癒；持續失敗時，確認仍有舊容器在運行則先停掉它。
 - 從手寫 compose 遷移：舊容器與卷的名稱可能與本映像的 `xbond-sing-box` 命名衝突，先 `docker compose down` 舊服務再啟動新的。
 - 連接埠衝突：宿主機已有服務佔用 7890／19090 時，改用偏好裏的其他連接埠並同步修改映射。
 - 控制台生成的命令中的連接埠是生成時刻的偏好快照，之後修改偏好不會回填已複製的命令。
