@@ -1,0 +1,59 @@
+name: Image
+
+# 映像發佈：推送 v* 標籤觸發。git 標籤的 -rN 修訂後綴只影響 git 一側
+# （v1.13.12 與 v1.13.12-r2 都發佈為映像 v1.13.12），同時更新 latest；
+# v{上游} 標籤允許覆蓋重發，已拉取用戶需手動重新拉取。
+# GHCR 包首發後需在 GitHub 包設定裏翻轉為 public（一次性）。
+on:
+  push:
+    tags: ["v*"]
+
+# 一次一個發佈；排隊的發佈被更新的推送取代，運行中的不會被打斷——取消
+# 運行中的發佈可能讓 latest 指向任何一側。
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 從標籤推導映像標籤與上游版本
+        id: meta
+        run: |
+          ref="${GITHUB_REF_NAME#v}"
+          version="v$(printf '%s' "$ref" | sed -E 's/-r[0-9]+$//')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          # 架構清單跟隨上游基礎映像；冷門架構的 apk 依賴可用性待首次多架構發佈驗證
+          platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/loong64,linux/ppc64le,linux/riscv64,linux/s390x
+          push: true
+          tags: |
+            ghcr.io/openxbond/sing-box:latest
+            ghcr.io/openxbond/sing-box:${{ steps.meta.outputs.version }}
+          build-args: |
+            SINGBOX_VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

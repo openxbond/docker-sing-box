@@ -1,0 +1,29 @@
+# 官方映像示例編排。控制台訂閱頁的 Docker 卡片會生成已填好你訂閱連結與
+# 連接埠的版本；本檔案用於沒有控制台入口的場合。
+#
+# 網關模式（下面未註釋的部分）：TUN + 宿主網絡接管整機／局域網流量，
+#   僅支援 Linux 宿主機（軟路由／NAS／伺服器）。
+# 連接埠模式：註釋掉 network_mode / cap_add / devices 三段，取消 ports 段的
+#   註釋並設定 MODE=port；適用於任何 Docker 宿主機（含 macOS／Windows 的
+#   Docker Desktop——那裏 TUN 無法接管宿主機流量，連接埠模式是正確用法）。
+services:
+  xbond-sing-box:
+    image: ghcr.io/openxbond/sing-box:v1.13.12
+    container_name: xbond-sing-box
+    restart: always
+    network_mode: host              # 網關模式：宿主網絡
+    cap_add:
+      - NET_ADMIN                   # 網關模式：TUN 與 auto_redirect 需要
+    devices:
+      - /dev/net/tun:/dev/net/tun   # 網關模式：TUN 裝置
+    # ports:                        # 連接埠模式改用這段；連接埠 = 你偏好裏的
+    #   - "7890:7890"               #   mixed 連接埠（開啟 clash_api 時追加 19090）
+    environment:
+      TZ: Asia/Shanghai             # 更新時刻的錨點（本地 04:00）跟隨時區
+      SUB_URL: https://example.xbond.dev/api/subscription/config?token=YOUR_SUBSCRIPTION_TOKEN&target=sing-box&lang=zh-HK
+      MODE: tun                     # tun = 網關模式（預設）；port = 連接埠模式
+      UPDATE_INTERVAL: 24h          # 更新間隔；觸發時刻 = 本地 04:00 + n×間隔
+    volumes:
+      - xbond-sing-box:/etc/sing-box
+volumes:
+  xbond-sing-box:

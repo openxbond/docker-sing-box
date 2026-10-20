@@ -1,0 +1,8 @@
+# 仓库在 Windows 上开发，shell 与容器内容必须保持 LF，否则入口脚本在
+# 容器里会因 CRLF 直接报错。
+* text=auto
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
