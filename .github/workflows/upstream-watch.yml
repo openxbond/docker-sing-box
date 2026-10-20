@@ -31,12 +31,16 @@ jobs:
     steps:
       - name: 盤點上游穩定版、已構建版本與待構建清單
         run: |
-          gh api "repos/SagerNet/sing-box/releases?per_page=100" --paginate \
-            --jq '.[] | select(.prerelease == false and .draft == false) | .tag_name' \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vu > upstream.txt
-          # 清單為空多半是 API 抖動（曾見 504）：失敗得大聲，等下一次排程重試，
-          # 而不是把「上游沒有版本」當成事實靜默放過。
-          [ -s upstream.txt ] || { echo "上游穩定版清單為空，疑似 API 抖動；本次中止"; exit 1; }
+          # releases API 偶发 504：三次退避重试后仍为空才中止——把「API 沒答」
+          # 與「上游沒有版本」分開，別把前者靜默當成事實放過。
+          for attempt in 1 2 3; do
+            gh api "repos/SagerNet/sing-box/releases?per_page=100" --paginate \
+              --jq '.[] | select(.prerelease == false and .draft == false) | .tag_name' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vu > upstream.txt && [ -s upstream.txt ] && break
+            echo "上游清單取得失敗（第 $attempt 次），重試中…"
+            sleep 10
+          done
+          [ -s upstream.txt ] || { echo "上游穩定版清單為空（重試耗盡）；本次中止"; exit 1; }
           # ghcr 包首建前不存在（404）視為空清單
           gh api "users/$OWNER/packages/container/$PACKAGE/versions?per_page=100" --paginate \
             --jq '.[].metadata.container.tags[]' 2>/dev/null \
