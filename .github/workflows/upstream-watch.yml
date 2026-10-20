@@ -1,0 +1,76 @@
+name: Upstream Watch
+
+# 上游發版看護：SagerNet/sing-box 出穩定版後自動構建對應的 v{上游} 映像，
+# 不帶 latest——鏡像是上游二進制加當前入口腳本，逐版本誠實發佈；未驗證的
+# 版本不進預設通道。latest 與控制台預填版本的升級仍由維護者在真實環境驗證
+# 後推 v{上游} git 標籤完成（重發該映像並把 latest 指過去），看護只負責開
+# issue 提醒這條升級路。
+on:
+  schedule:
+    - cron: "37 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PACKAGE: sing-box
+      OWNER: openxbond
+      MIN_VERSION: v1.13.12 # 我們支援的最低上游版本；更早的歷史版本不補
+    steps:
+      - name: 盤點上游穩定版、已構建版本與待構建清單
+        run: |
+          gh api "repos/SagerNet/sing-box/releases?per_page=100" --paginate \
+            --jq '.[] | select(.prerelease == false and .draft == false) | .tag_name' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vu > upstream.txt
+          # ghcr 包首建前不存在（404）視為空清單
+          gh api "users/$OWNER/packages/container/$PACKAGE/versions?per_page=100" --paginate \
+            --jq '.[].metadata.container.tags[]' 2>/dev/null \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vu > built.txt || true
+          # 支援範圍從 MIN_VERSION 起：把下限插進合併排序序列，取其自身與之後
+          { echo "$MIN_VERSION"; cat upstream.txt built.txt; } \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vu \
+            | awk -v min="$MIN_VERSION" 'p { print } $0 == min { p = 1; print }' > scope.txt
+          comm -23 scope.txt built.txt > missing.txt
+          echo "上游穩定版 $(wc -l < upstream.txt)，已構建 $(wc -l < built.txt)，待構建 $(wc -l < missing.txt)"
+          cat missing.txt
+
+      - name: 觸發待構建版本的映像發佈
+        run: |
+          while read -r version; do
+            [ -n "$version" ] || continue
+            echo "dispatch $version"
+            gh workflow run image.yml --ref main -f version="$version" -f update_latest=false
+            sleep 5 # 讓每次 dispatch 的 workflow run 先落地；並發組會自動排隊
+          done < missing.txt
+
+      - name: 提醒維護者驗證並升級 latest
+        run: |
+          newest=$(tail -1 upstream.txt)
+          echo "$newest" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' || exit 0
+          latest_tags=$(gh api "users/$OWNER/packages/container/$PACKAGE/versions?per_page=100" --paginate \
+            --jq '.[] | select(.metadata.container.tags | index("latest")) | .metadata.container.tags[]' 2>/dev/null \
+            | sort -u || true)
+          if echo "$latest_tags" | grep -qx "$newest"; then
+            echo "latest 已指向 $newest，無需提醒"
+            exit 0
+          fi
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open --json title \
+              --jq '.[].title' | grep -qF "上游新版本"; then
+            echo "已有開放的升級提醒 issue"
+            exit 0
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "上游新版本 $newest：驗證後升級 latest 與控制台預填版本" \
+            --body "上游穩定版 $newest 已自動構建為映像標籤（未動 latest）。驗證通過後：1）在真實環境實測 \`ghcr.io/openxbond/sing-box:$newest\`；2）更新 xbond 倉庫 \`apps/app/lib/docker-command.ts\` 的 \`DOCKER_IMAGE_TAG\`；3）推送 git 標籤 \`$newest\`——會重發該版本映像並把 latest 指過去。"

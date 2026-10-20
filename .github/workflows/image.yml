@@ -1,12 +1,24 @@
 name: Image
 
-# 映像發佈：推送 v* 標籤觸發。git 標籤的 -rN 修訂後綴只影響 git 一側
-# （v1.13.12 與 v1.13.12-r2 都發佈為映像 v1.13.12），同時更新 latest；
-# v{上游} 標籤允許覆蓋重發，已拉取用戶需手動重新拉取。
-# GHCR 包首發後需在 GitHub 包設定裏翻轉為 public（一次性）。
+# 映像發佈：推送 v* 標籤觸發（發佈正式版本並更新 latest）；也支援手動觸發
+# 補發歷史版本（inputs.version，不動 latest）。git 標籤的 -rN 修訂後綴只在
+# git 一側（v1.13.12 與 v1.13.12-r2 都發佈為映像 v1.13.12）；v{上游} 標籤
+# 允許覆蓋重發，已拉取用戶需手動重新拉取。
+# 上游新穩定版的例行構建由 upstream-watch.yml 自動觸發；GHCR 包首發後需在
+# GitHub 包設定裏翻轉為 public（一次性）。
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "上游 sing-box 版本（v1.14.3 形式）"
+        required: true
+        type: string
+      update_latest:
+        description: "同時把 latest 指向該版本"
+        type: boolean
+        default: false
 
 # 一次一個發佈；排隊的發佈被更新的推送取代，運行中的不會被打斷——取消
 # 運行中的發佈可能讓 latest 指向任何一側。
@@ -29,12 +41,34 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: 從標籤推導映像標籤與上游版本
+      - name: 從標籤或輸入推導映像標籤與上游版本
         id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_UPDATE_LATEST: ${{ inputs.update_latest }}
         run: |
-          ref="${GITHUB_REF_NAME#v}"
-          version="v$(printf '%s' "$ref" | sed -E 's/-r[0-9]+$//')"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
+            case $version in
+              v[0-9]*.[0-9]*.[0-9]*) ;;
+              *) echo "非法版本：$version"; exit 1 ;;
+            esac
+            update_latest=$INPUT_UPDATE_LATEST
+          else
+            ref="${GITHUB_REF_NAME#v}"
+            version="v$(printf '%s' "$ref" | sed -E 's/-r[0-9]+$//')"
+            update_latest=true
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<TAGS_EOF"
+            echo "ghcr.io/openxbond/sing-box:$version"
+            if [ "$update_latest" = "true" ]; then
+              echo "ghcr.io/openxbond/sing-box:latest"
+            fi
+            echo "TAGS_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -50,9 +84,7 @@ jobs:
           # 架構清單跟隨上游基礎映像；冷門架構的 apk 依賴可用性待首次多架構發佈驗證
           platforms: linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64,linux/loong64,linux/ppc64le,linux/riscv64,linux/s390x
           push: true
-          tags: |
-            ghcr.io/openxbond/sing-box:latest
-            ghcr.io/openxbond/sing-box:${{ steps.meta.outputs.version }}
+          tags: ${{ steps.meta.outputs.tags }}
           build-args: |
             SINGBOX_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
