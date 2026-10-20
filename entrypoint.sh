@@ -1,24 +1,30 @@
 #!/usr/bin/env bash
-# 官方 sing-box 客戶端映像入口：拉取訂閱設定 → 按模式變換 → sing-box check
-# 校驗 → 原子套用。行為契約見 xbond 倉庫 docs/specs/docker-client.md；本檔案
-# 是該契約的實現。
+# 官方 sing-box 客戶端映像入口：拉取訂閱設定 → 按模式推導運行設定 → sing-box
+# check 校驗 → 原子套用。行為契約見 xbond 倉庫 docs/specs/docker-client.md；
+# 本檔案是該契約的實現。
 #
 # 設計要點：
+# - 原始設定與運行設定分離：config.source 原樣緩存端點簽發的內容；
+#   config.json 每次按當前 MODE 從原始設定推導（tun 補 auto_redirect、port
+#   刪 tun 入站）。切換模式重啟即可重建，304 與離線同樣自愈——只改運行設定
+#   而不重拉，正是為了模式切換不依賴網絡。
 # - 家電語義：除了 sing-box 子程序意外退出，容器不主動退出——拉取失敗、設定
 #   校驗失敗、環境變數寫錯都只是記錄加按節奏重試；交由 `restart: always` 處理
 #   的只有真正的崩潰。
-# - 設定永不回退：卷內 config.json 永遠是最近一次通過 sing-box check 的內容；
+# - 設定永不回退：config.json 永遠是最近一次通過 sing-box check 的內容；
 #   校驗不過的新設定直接丟棄，運行中的程序不受影響。
 # - 快取標籤只在設定通過校驗後保存，保證 304 不會跳過一個曾經失敗的內容。
 set -u -o pipefail
 
-STATE_DIR=/etc/sing-box            # 卷：運行中設定與快取標籤
+STATE_DIR=/etc/sing-box            # 卷：原始設定、運行設定與快取標籤
 RUN_DIR=/run/xbond-sing-box        # 臨時區：下載暫存與健康檢查連接埠
+SOURCE=$STATE_DIR/config.source       # 無 .json 後綴：-C 會載入目錄內所有 .json
 CONFIG=$STATE_DIR/config.json
 ETAG_FILE=$STATE_DIR/.etag
-NEW_CONFIG=$RUN_DIR/config.new
+SOURCE_TMP=$RUN_DIR/config.source.new
+CANDIDATE=$RUN_DIR/config.new
 PORT_FILE=$RUN_DIR/mixed-port
-NFT_TABLE="inet sing-box"          # sing-box auto_redirect 的 nftables 表
+NFT_TABLE="inet sing-box"          # auto_redirect 留下的 nftables 表
 DEFAULT_INTERVAL=86400             # 24 小時
 MIN_INTERVAL=600                   # 10 分鐘，防止誤配的間隔衝擊訂閱端點
 FIRST_RETRY_SECONDS=30
@@ -79,13 +85,20 @@ resolve_settings() {
   fi
 }
 
-# ---------- 拉取 → 變換 → 校驗 → 套用 ----------
+# ---------- 拉取 → 推導 → 校驗 → 套用 ----------
+
+mode_filter() {  # 按 MODE 輸出 jq 過濾器
+  case $MODE in
+    tun) echo '.inbounds |= map(if .type == "tun" then . + {auto_redirect: true} else . end)' ;;
+    port) echo '.inbounds |= map(select(.type != "tun"))' ;;
+  esac
+}
 
 fetch_config() {  # 結果寫入 FETCH_STATUS：downloaded | unchanged | error
   FETCH_STATUS=error
   mkdir -p "$RUN_DIR"
-  rm -f "$NEW_CONFIG"
-  local args=(-q -S -T "$WGET_TIMEOUT" -O "$NEW_CONFIG")
+  rm -f "$SOURCE_TMP" "$RUN_DIR/etag.new"
+  local args=(-q -S -T "$WGET_TIMEOUT" -O "$SOURCE_TMP")
   if [ -s "$ETAG_FILE" ]; then
     args+=(--header="If-None-Match: $(cat "$ETAG_FILE")")
   fi
@@ -99,8 +112,6 @@ fetch_config() {  # 結果寫入 FETCH_STATUS：downloaded | unchanged | error
       etag=$(printf '%s\n' "$raw" | sed -n 's/^[[:space:]]*[Ee][Tt]ag:[[:space:]]*\(.*\)$/\1/p' | tail -n 1)
       if [ -n "$etag" ]; then
         printf '%s\n' "$etag" > "$RUN_DIR/etag.new"
-      else
-        rm -f "$RUN_DIR/etag.new"
       fi
       FETCH_STATUS=downloaded
       ;;
@@ -113,70 +124,78 @@ fetch_config() {  # 結果寫入 FETCH_STATUS：downloaded | unchanged | error
   esac
 }
 
-transform_config() {  # 0=成功；失敗即回應不是可解析的訂閱設定 JSON
-  local filter
-  case $MODE in
-    tun) filter='.inbounds |= map(if .type == "tun" then . + {auto_redirect: true} else . end)' ;;
-    port) filter='.inbounds |= map(select(.type != "tun"))' ;;
-  esac
-  jq -e "$filter" "$NEW_CONFIG" > "$NEW_CONFIG.tmp" 2>/dev/null || {
-    log "設定無效：回應不是可解析的訂閱設定 JSON，已丟棄"
+derive_candidate() {  # 從原始設定按 MODE 產出候選運行設定，0=通過校驗
+  local src=$1 filter out
+  filter=$(mode_filter)
+  if ! jq -e "$filter" "$src" > "$CANDIDATE" 2>/dev/null; then
+    log "設定無效：內容不是可解析的訂閱設定 JSON，已丟棄"
+    rm -f "$CANDIDATE"
     return 1
-  }
-  mv "$NEW_CONFIG.tmp" "$NEW_CONFIG"
-}
-
-validate_config() {  # 0=通過 sing-box check
-  local out
-  if ! out=$(sing-box check -c "$NEW_CONFIG" 2>&1); then
+  fi
+  if ! out=$(sing-box check -c "$CANDIDATE" 2>&1); then
     log "新設定未通過 sing-box check，保留現有設定：${out}"
+    rm -f "$CANDIDATE"
     return 1
   fi
 }
 
-write_port_file() {  # 健康檢查探測目前設定的 mixed 連接埠，連接埠運行期從設定讀取
-  jq -er '[.inbounds[] | select(.type == "mixed")][0].listen_port' "$CONFIG" > "$PORT_FILE" 2>/dev/null ||
-    echo 7890 > "$PORT_FILE"
+install_candidate() {  # 0=已套用；2=內容無變化
+  if [ ! -f "$CONFIG" ]; then
+    mv "$CANDIDATE" "$CONFIG"
+    write_port_file
+    return 0
+  fi
+  if cmp -s "$CANDIDATE" "$CONFIG"; then
+    rm -f "$CANDIDATE"
+    log "訂閱設定無變化"
+    return 2
+  fi
+  mv "$CANDIDATE" "$CONFIG"
+  write_port_file
+  log "訂閱設定有變化"
+  # 啟動階段由 main 統一拉起子程序；運行期才在這裡重啟
+  if [ -n "$CHILD_PID" ]; then
+    log "重新啟動 sing-box"
+    restart_child
+  fi
+  return 0
 }
 
-# 返回值：0=已套用（首次落盤或已重啟）；1=新設定無效；2=內容無變化
-apply_config() {
-  transform_config || return 1
-  validate_config || return 1
-  # 校驗通過才保存快取標籤：304 永遠不會跳過一個曾經失敗的內容
+apply_download() {  # 新內容已下載到 SOURCE_TMP：先推導校驗，通過才提升為來源
+  derive_candidate "$SOURCE_TMP" || return 1
+  # 校驗通過才保存來源與快取標籤：304 永遠不會跳過一個曾經失敗的內容
+  mv "$SOURCE_TMP" "$SOURCE"
   if [ -f "$RUN_DIR/etag.new" ]; then
     mv "$RUN_DIR/etag.new" "$ETAG_FILE"
   else
     rm -f "$ETAG_FILE"
   fi
-  if [ ! -f "$CONFIG" ]; then
-    mv "$NEW_CONFIG" "$CONFIG"
-    write_port_file
-    return 0
-  fi
-  if cmp -s "$NEW_CONFIG" "$CONFIG"; then
-    rm -f "$NEW_CONFIG"
-    log "訂閱設定無變化"
-    return 2
-  fi
-  mv "$NEW_CONFIG" "$CONFIG"
-  write_port_file
-  log "訂閱設定有變化，重新啟動 sing-box"
-  restart_child
-  return 0
+  install_candidate
 }
 
-update_once() {  # 一輪完整的拉取→套用；任何失敗都只記錄，不拋給調用方
+derive_runtime() {  # 無新內容（304／啟動）時，從已緩存來源按當前模式重建
+  [ -f "$SOURCE" ] || return 1
+  derive_candidate "$SOURCE" || return 1
+  install_candidate
+}
+
+update_once() {  # 一輪完整同步；任何失敗都只記錄，不拋給調用方
   fetch_config
   case $FETCH_STATUS in
-    unchanged)
-      log "訂閱無更新（304）"
-      ;;
     downloaded)
-      apply_config || true
+      apply_download || true
+      ;;
+    unchanged)
+      log "訂閱無更新（304），按當前模式檢查運行設定"
+      derive_runtime || true
       ;;
   esac
   return 0
+}
+
+write_port_file() {  # 健康檢查探測目前設定的 mixed 連接埠，連接埠運行期從設定讀取
+  jq -er '[.inbounds[] | select(.type == "mixed")][0].listen_port' "$CONFIG" > "$PORT_FILE" 2>/dev/null ||
+    echo 7890 > "$PORT_FILE"
 }
 
 # ---------- sing-box 子程序 ----------
@@ -254,15 +273,21 @@ main() {
   mkdir -p "$STATE_DIR" "$RUN_DIR"
   cleanup_nft    # 清掉上次非正常退出殘留的表
 
+  # 舊卷遷移：只有運行設定、沒有原始設定時，把現有內容當作來源（可能已按
+  # 另一模式變換過；若曾切換模式，刪卷重建即可恢復完整原始內容）。
+  if [ ! -f "$SOURCE" ] && [ -f "$CONFIG" ]; then
+    cp "$CONFIG" "$SOURCE"
+    log "舊卷缺少原始設定，已把現有 config.json 遷移為來源；曾切換過模式時建議刪卷重建"
+  fi
+
   # 啟動必拉一次；拿到第一份可用設定前按節奏重試，容器不退出
-  while [ ! -f "$CONFIG" ]; do
+  while :; do
     [ "$STOP" -eq 1 ] && exit 0
     if [ "$SUB_URL_OK" -eq 1 ]; then
       update_once
-    else
-      log "尚無可用設定，${FIRST_RETRY_SECONDS}s 後重試"
     fi
     [ -f "$CONFIG" ] && break
+    log "尚無可用設定，${FIRST_RETRY_SECONDS}s 後重試"
     sleep_until "$(( $(date +%s) + FIRST_RETRY_SECONDS ))" && true || exit 0
   done
 
