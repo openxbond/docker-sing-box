@@ -20,10 +20,10 @@ on:
         type: boolean
         default: false
 
-# 一次一個發佈；排隊的發佈被更新的推送取代，運行中的不會被打斷——取消
-# 運行中的發佈可能讓 latest 指向任何一側。
+# 同版本串行、不同版本並行：GitHub 的並發組只保留一個排隊 run，全域串行時
+# 批量補發會互相取消排隊者。latest 的競爭只在同版本重發時發生，版本鍵已覆蓋。
 concurrency:
-  group: ${{ github.workflow }}
+  group: image-${{ inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
