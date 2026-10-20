@@ -16,7 +16,7 @@ docker run -d --name xbond-sing-box --restart always \
   -v xbond-sing-box:/etc/sing-box \
   -e TZ=Asia/Shanghai \
   -e SUB_URL='https://example.xbond.dev/api/subscription/config?token=YOUR_SUBSCRIPTION_TOKEN&target=sing-box&lang=zh-HK' \
-  ghcr.io/openxbond/sing-box:v1.13.12
+  ghcr.io/openxbond/sing-box:v1.13.21
 ```
 
 連接埠模式（任何 Docker 宿主機，含 macOS／Windows 的 Docker Desktop；自行把系統或瀏覽器代理指向 `7890`）：
@@ -27,7 +27,7 @@ docker run -d --name xbond-sing-box --restart always \
   -v xbond-sing-box:/etc/sing-box \
   -e TZ=Asia/Shanghai -e MODE=port \
   -e SUB_URL='https://example.xbond.dev/api/subscription/config?token=YOUR_SUBSCRIPTION_TOKEN&target=sing-box&lang=zh-HK' \
-  ghcr.io/openxbond/sing-box:v1.13.12
+  ghcr.io/openxbond/sing-box:v1.13.21
 ```
 
 偏好 docker compose 的用 [compose.example.yaml](compose.example.yaml)，兩種模式的差異都在註釋裏。
@@ -86,7 +86,7 @@ shellcheck -S error entrypoint.sh build.sh
 
 ## 發佈
 
-推送 `v*` 標籤觸發 CI 多架構發佈：`v1.13.12` 發佈映像 `latest` 與 `v1.13.12`；修訂後綴 `-rN`（如 `v1.13.12-r2`）只存在於 git 一側，映像標籤仍為 `v1.13.12`——修復入口腳本不提升上游版本時用它重發。上游版本固定、由維護者驗證後升級，映像不自動跟隨上游浮動。GHCR 包首次發佈後需在 GitHub 包設定裏翻轉為 public（一次性）。
+推送 `v*` 標籤觸發 CI 多架構發佈：`v1.13.21` 發佈映像 `latest` 與 `v1.13.21`；修訂後綴 `-rN`（如 `v1.13.21-r2`）只存在於 git 一側，映像標籤仍為 `v1.13.21`——修復入口腳本不提升上游版本時用它重發。上游版本固定、由維護者驗證後升級，映像不自動跟隨上游浮動。GHCR 包首次發佈後需在 GitHub 包設定裏翻轉為 public（一次性）。
 
 ## 安全說明
 

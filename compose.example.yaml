@@ -8,7 +8,7 @@
 #   Docker Desktop——那裏 TUN 無法接管宿主機流量，連接埠模式是正確用法）。
 services:
   xbond-sing-box:
-    image: ghcr.io/openxbond/sing-box:v1.13.12
+    image: ghcr.io/openxbond/sing-box:v1.13.21
     container_name: xbond-sing-box
     restart: always
     network_mode: host              # 網關模式：宿主網絡

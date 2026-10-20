@@ -4,7 +4,7 @@
 #
 # NET_ADMIN 與 /dev/net/tun 由運行方在網關模式下授予，映像內不預設特權；
 # 容器以 root 運行是 TUN 的要求（需要 CAP_NET_ADMIN）。
-ARG SINGBOX_VERSION=v1.13.12
+ARG SINGBOX_VERSION=v1.13.21
 FROM ghcr.io/sagernet/sing-box:${SINGBOX_VERSION}
 
 # bash：入口腳本；jq：模式變換（給 tun 入站補 auto_redirect / 刪除 tun 入站）；

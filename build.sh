@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # 本地建置。用法：
 #   ./build.sh                    本機平台建置，映像名 docker-sing-box:dev
-#   ./build.sh v1.13.12           指定上游 sing-box 版本
-#   ./build.sh --push v1.13.12    全架構建置並推送 latest 與 v1.13.12（需先
+#   ./build.sh v1.13.21           指定上游 sing-box 版本
+#   ./build.sh --push v1.13.21    全架構建置並推送 latest 與 v1.13.21（需先
 #                                 docker login ghcr.io）；正式發佈走 CI
 #                                 （推 v* 標籤），本命令用於驗證
 set -euo pipefail
 
 repo=ghcr.io/openxbond/sing-box
-version=v1.13.12
+version=v1.13.21
 push=0
 for arg in "$@"; do
   case $arg in

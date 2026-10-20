@@ -8,8 +8,8 @@ XBond 官方 sing-box 客戶端映像的獨立公開倉庫：上游 sing-box 映
 bash tests/next-tick.test.sh                    # 排程語義與間隔解析單測
 shellcheck -S error entrypoint.sh build.sh      # 腳本靜態檢查
 ./build.sh                                      # 本機平台建置 docker-sing-box:dev
-./build.sh v1.13.12                             # 指定上游版本
-./build.sh --push v1.13.12                      # 全架構建置並推送（驗證用；正式發佈走 CI）
+./build.sh v1.13.21                             # 指定上游版本
+./build.sh --push v1.13.21                      # 全架構建置並推送（驗證用；正式發佈走 CI）
 ```
 
 ## 約定
