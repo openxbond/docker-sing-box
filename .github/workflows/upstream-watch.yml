@@ -58,7 +58,8 @@ jobs:
           while read -r version; do
             [ -n "$version" ] || continue
             echo "dispatch $version"
-            gh workflow run image.yml --ref main -f version="$version" -f update_latest=false
+            # 本工作流不 checkout：gh 拿不到 git 倉庫上下文，必須顯式 -R 指定
+            gh workflow run image.yml -R "$GITHUB_REPOSITORY" --ref main -f version="$version" -f update_latest=false
             sleep 5 # 讓每次 dispatch 的 workflow run 先落地；並發組會自動排隊
           done < missing.txt
 
