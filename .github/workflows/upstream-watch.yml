@@ -14,6 +14,7 @@ permissions:
   contents: read
   packages: read
   issues: write
+  actions: write # 觸發 image.yml 的 workflow_dispatch
 
 concurrency:
   group: ${{ github.workflow }}
