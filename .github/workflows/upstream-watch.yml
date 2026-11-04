@@ -6,8 +6,6 @@ name: Upstream Watch
 # 後推 v{上游} git 標籤完成（重發該映像並把 latest 指過去），看護只負責開
 # issue 提醒這條升級路。
 on:
-  schedule:
-    - cron: "37 */6 * * *"
   workflow_dispatch:
 
 permissions:
